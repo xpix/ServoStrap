@@ -41,6 +41,6 @@ and use it to control a servo-motor with active position tracker.
      
      
   To use the code you need first to put the two files called digitalWriteFast.h and Keywords.txt in a folder inside arduino/libraries
-     
-   
    here the youtube link of the test with this code: http://goo.gl/gAia5y
+   
+   Changes from Frank Herrmann for XMoto
