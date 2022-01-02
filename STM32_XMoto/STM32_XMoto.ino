@@ -13,7 +13,6 @@ for motor controll you can choose different type of H-bridge, i have used LMD182
 you can order 3 of it on ti.com sample request, the hardware needed is explained on the datasheet but i'm drowing
 the schematic and PCB layout on eagle.
 
-
 read a rotary encoder with interrupts
 Encoder hooked up with common to GROUND,
 encoder0PinA to pin 2, encoder0PinB to pin 4 (or pin 3 see below)
@@ -25,6 +24,9 @@ example: 5.2,3.1,0 so we have  KP=5.2 KD=3.1 KI=0 is only for testing purposes, 
 Changes from Frank Herrmann for XMoto
 
 */ 
+
+#include <PID_v2.h>
+
 
 // Connect to Hall Sensor PCB
 #define encoder0PinA  	PA8
@@ -41,26 +43,29 @@ Changes from Frank Herrmann for XMoto
 
 volatile long encoder0Pos = 0;
 
-long target  = 0;
-long target1 = 0;
-int  amp     = 212;
+long ToSteps  = 0;
+long GetSteps = 0;
 
-//PID controller constants
-float KP = 6.0; //position multiplier (gain) 2.25
-float KI = 0.1; // Intergral multiplier (gain) .25
-float KD = 1.3; // derivative multiplier (gain) 1.0
+// PID_v2
+double kp = 6 , ki = 0.1 , kd = 0.01;
+double input = 0, output = 0, setpoint = 0;
+PID myPID(&input, &output, &setpoint, kp, ki, kd, DIRECT);  
 
 
 int lastError = 0;
 int sumError  = 0;
 
 //Integral term min/max (random value and not yet tested/verified)
-int iMax = 100;
+int iMax = 20000;
 int iMin = 0;
 
-long previousTarget = 0;
+long LastInterval = 0;
 long previousMillis = 0;        // will store last time LED was updated
 long interval       = 5;        // interval at which to blink (milliseconds)
+
+int amp     	= 32500; // maximum PWN Value
+int correction	= 0;	 // PID value
+int motorspeed  = 0;
 
 //for motor control ramps 1.4
 bool newStep = false;
@@ -83,89 +88,48 @@ void setup() {
 	pinMode(STEP_PIN, INPUT);
 	pinMode(DIR_PIN, INPUT);
 
-	// Some Tests
-	/* 
-	Serial.println("start tests");
-
-		Serial.println("led on");
-		digitalWrite(EnableLED, HIGH);
-
-		Serial.println("motor on");
-		digitalWrite( MotorDIR, HIGH);
-		analogWrite ( MotorPWM,  255);
-		delay(10000);
-		digitalWrite(EnableLED, LOW);
-
-	Serial.println("end tests");
-	*/
-
-
-
+	// Interupts for position and target steps 
 	attachInterrupt(encoder0PinB, doEncoderMotor0, CHANGE);  // encoderA pin on interrupt
 	attachInterrupt(STEP_PIN, 	  countStep, 	   RISING);  // interrupt to count steppules
 
+	analogWriteFrequency(350000);	// Set PWM Frequenzy to 35KHz
+
+	myPID.SetMode(AUTOMATIC);   	//set PID in Auto mode
+	myPID.SetSampleTime(50);  		// refresh rate of PID controller
+	myPID.SetOutputLimits(-255, 255); // this is the MAX PWM value to move motor
+
 	Serial.println("start");
+	Serial.println("Position ToPosition MotorPWM");
+
 } 
 
 void loop(){
   
-	while (Serial.available() > 0) {
-		KP = Serial.read();
-		KD = Serial.read();
-		KI = Serial.read();
-
-
-		Serial.println(KP);
-		Serial.println(KD);
-		Serial.println(KI);
-	}
-  
-	if(millis() - previousTarget > 500){ //enable this code only for test purposes
-		Serial.print(encoder0Pos);
-		Serial.print(',');
-		Serial.println(target1);
-		previousTarget=millis();
+	// Diganostic via serialplotter from arduino ide
+	if(millis() - LastInterval > 50 && abs(output) > 29){
+		Serial.print(input);
+		Serial.print(" ");
+		Serial.print(output);
+		Serial.print(" ");
+		Serial.println(setpoint);
+		LastInterval=millis();
 	}
         
-	target = target1;
-	docalc();
+	setpoint = GetSteps; // setpoint to Steps get from controller
+	input = encoder0Pos; // real Position
+	myPID.Compute();	 // compute correct value
+	pwmOut(output);		 // get PWM Value from PID calculated
 }
 
-void docalc() {
-  
-	if (millis() - previousMillis > interval) 
-	{
-		previousMillis = millis();   // remember the last time we blinked the LED
-
-		long error = encoder0Pos - target ; // find the error term of current position - target    
-
-		//generalized PID formula
-		//correction = Kp * error + Kd * (error - prevError) + kI * (sum of errors)
-		long ms = KP * error + KD * (error - lastError) +KI * (sumError);
-		   
-		lastError = error;    
-		sumError += error;
-
-		//scale the sum for the integral term
-		if(sumError > iMax) {
-			sumError = iMax;
-		} else if(sumError < iMin){
-			sumError = iMin;
-		}
-
-		if(ms > 0){
-			digitalWrite ( MotorDIR ,HIGH );      
-		}
-		if(ms < 0){
-			digitalWrite ( MotorDIR , LOW );     
-			ms = -1 * ms;
-		}
-
-		int motorspeed = map(ms,0,amp,0,255);
-		if( motorspeed >= 255) motorspeed=255;
-		//analogWrite ( MotorPWM, (255 - motorSpeed) );
-		analogWrite ( MotorPWM,  motorspeed );
-	}  
+void pwmOut(int out) {                               
+	if (out > 0) {
+		analogWrite( MotorPWM, out );      	
+		digitalWrite ( MotorDIR ,LOW );
+	}
+	else {
+		analogWrite( MotorPWM, abs(out) );                      
+		digitalWrite ( MotorDIR, HIGH );		// if REV < encoderValue motor move in reverse direction.   
+  }
 }
 
 void doEncoderMotor0(){
@@ -192,6 +156,6 @@ void doEncoderMotor0(){
 
 void countStep(){
 	dir = digitalRead(DIR_PIN);
-	if (dir) target1++;
-	else target1--;
+	if (dir) GetSteps++;
+	else GetSteps--;
 }
